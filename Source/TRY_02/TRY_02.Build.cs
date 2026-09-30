@@ -17,6 +17,11 @@ public class TRY_02 : ModuleRules
 			"AIModule",
 			"StateTreeModule",
 			"GameplayStateTreeModule",
+			// CombatDummy создаёт UPhysicsConstraintComponent
+			// (PhysicsEngine/PhysicsConstraintComponent.h). Без PhysicsCore
+			// сборка падает «Unable to find module PhysicsCore» — и падает
+			// только на целевой платформе, а не в редакторе.
+			"PhysicsCore",
 			"UMG",
 			"Slate"
 		});

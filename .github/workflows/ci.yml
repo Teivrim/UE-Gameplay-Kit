@@ -1,0 +1,92 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Статика Unreal-проекта
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The engine itself is not installed here and never will be: Unreal
+      # Engine 5.8 is about 100 GB and its licence terms do not allow
+      # putting it on a hosted runner. So this does not compile anything.
+      #
+      # What it does check is the class of fault that costs a client an
+      # hour of building and a day of guessing: the project disagreeing
+      # with itself. Reflection without its .generated.h, a module used
+      # but absent from Build.cs, a plugin referenced but disabled, a
+      # header nobody includes. All of that is readable from the source,
+      # and all of it stops the build with a message that does not name
+      # the cause.
+      - name: Проверить согласованность проекта
+        run: python scripts\check_uproject.py .
+
+      - name: Ассеты на месте
+        shell: pwsh
+        run: |
+          # Content must not be empty. An Unreal project whose Content is
+          # missing opens to a blank level and looks like it works, and the
+          # fault only shows up when the client runs it.
+          $assets = @(Get-ChildItem Content -Recurse -File -Include *.uasset,*.umap)
+          if ($assets.Count -eq 0) {
+            "Content пуст — проект откроется пустым уровнем"
+            exit 1
+          }
+          "ассетов: $($assets.Count), {0:N1} МБ" -f (
+            ($assets | Measure-Object Length -Sum).Sum / 1MB)
+
+      - name: Сборочный мусор не попал в репозиторий
+        shell: pwsh
+        run: |
+          # Binaries and Intermediate are three gigabytes of build output
+          # that is regenerated on the client's machine. Committing them
+          # makes the repository unusable without also shipping a
+          # particular engine build and platform.
+          $junk = @()
+          foreach ($d in @('Binaries', 'Intermediate', 'DerivedDataCache', 'Saved')) {
+            if (Test-Path $d) { $junk += $d }
+          }
+          if ($junk.Count -gt 0) {
+            "в репозитории есть сборочный мусор: $($junk -join ', ')"
+            exit 1
+          }
+          "мусора нет"
+
+      - name: Проверка не ослаблена
+        shell: pwsh
+        run: |
+          # The last time this project's status was decided by hand, the
+          # answer was "cannot be verified in CI" and nobody looked at it
+          # again. A check that can be quietly emptied is worse than a
+          # missing check, because it reports a green that means nothing.
+          $py = 'scripts\check_uproject.py'
+          if (-not (Test-Path $py)) { "проверка удалена"; exit 1 }
+          $body = Get-Content $py -Raw
+          foreach ($needed in @('UCLASS', 'generated.h', 'Build.cs')) {
+            if ($body -notmatch [regex]::Escape($needed)) {
+              "в проверке больше нет контроля над: $needed"
+              exit 1
+            }
+          }
+          # `return 0` must appear exactly once: it is the only place the
+          # script can report success, so a second one is a way to pass
+          # without having checked anything.
+          $hits = @(Select-String -Path $py -Pattern 'return 0')
+          if ($hits.Count -ne 1) {
+            "в проверке $($hits.Count) точек выхода с кодом 0 — она может выйти зелёной, ни разу не проверив ничего"
+            exit 1
+          }
+          "проверка на месте и не ослаблена"
